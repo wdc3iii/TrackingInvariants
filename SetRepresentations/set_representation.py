@@ -197,8 +197,22 @@ class Polytope(AbstractSet):
             self.polytope = pc.Polytope(A, b)
             self.polytope = pc.reduce(self.polytope)
             self.extreme = pc.extreme(self.polytope)
+        self._findAuxPoints()
     
-    def sampleSet(self, N: int, thin=2) -> np.ndarray:
+    def sampleSet(self, N:int) -> np.ndarray:
+        boundingBox = self.polytope.bounding_box
+        allSamples = np.zeros((self.polytope.dim, N))
+        ii = 0
+        while ii < N:
+            samples = np.random.uniform(boundingBox[0], boundingBox[1], (self.polytope.dim, 4 * N - ii))
+            samples = samples[:, self.inSet(samples.T)]
+            if samples.shape[1] > N - ii:
+                samples = samples[:, 0:N - ii]
+            allSamples[:, ii:ii + samples.shape[1]] = samples
+            ii += samples.shape[1]
+        return allSamples.T
+    
+    def sampleSetHitandRun(self, N:int, thin=2) -> np.ndarray:
         """Samples N points uniformly from the set, via hit and run sampling.
 
         Args:
@@ -210,7 +224,7 @@ class Polytope(AbstractSet):
         """Get the requested samples."""
         assert int(N) > 0
         samples = np.zeros((int(N), self.polytope.dim))
-        coeff = np.random.uniform(0, 1, (self.polytope.dim,))
+        coeff = np.random.uniform(0, 1, (self.extreme.shape[0],))
         point = coeff / np.sum(coeff) @ self.extreme
         # keep only one every thin
         for ii in range(N):
@@ -232,7 +246,7 @@ class Polytope(AbstractSet):
         Returns:
             np.ndarray: Set membership of given points
         """
-        return self.polytope.contains(points)
+        return self.polytope.contains(points.T)
 
     def getDesc(self) -> dict:
         return {"Method": "Polytope", "Desc": {"A": np.copy(self.polytope.A), "b": np.copy(self.polytope)}}
@@ -250,34 +264,45 @@ class Polytope(AbstractSet):
         reach a given hyperplane.
         """
         A = self.polytope.A
-        p = self.polytope.auxiliar_points
+        p = self.auxPoints
 
         lambdas = []
-        for i in range(self.polytope.nplanes):
+        for i in range(self.polytope.A.shape[0]):
             if np.isclose(direction @ A[i], 0):
                 lambdas.append(np.nan)
             else:
                 lam = ((p[i] - point) @ A[i]) / (direction @ A[i])
                 lambdas.append(lam)
-        return lambdas
+        return np.array(lambdas)
+
+    def _findAuxPoints(self):
+        aux_points = [self._findAuxPoint(self.polytope.A[i], self.polytope.b[i])
+                      for i in range(self.polytope.A.shape[0])]
+        self.auxPoints = aux_points
+    
+    def _findAuxPoint(self, alpha, beta):
+        p = np.zeros(self.polytope.dim)
+        j = np.argmax(alpha != 0)
+        p[j] = beta / alpha[j]
+        return p
     
     def _step(self, point) -> np.ndarray:
         """Make one step."""
         # set random direction
         direction = self._getRandDirection()
         # find lambdas
-        self._find_lambdas(point, direction)
+        lambdas = self._findLambdas(point, direction)
         # find smallest positive and negative lambdas
         try:
-            lam_plus = np.min(self.lambdas[self.lambdas > 0])
-            lam_minus = np.max(self.lambdas[self.lambdas < 0])
+            lam_plus = np.min(lambdas[lambdas > 0])
+            lam_minus = np.max(lambdas[lambdas < 0])
         except(Exception):
             raise RuntimeError("The current direction does not intersect"
                                "any of the hyperplanes.")
         # throw random point between lambdas
         lam = np.random.uniform(low=lam_minus, high=lam_plus)
         # compute new point and add it
-        new_point = point + lam * self.direction
+        new_point = point + lam * direction
         return new_point
     
 
