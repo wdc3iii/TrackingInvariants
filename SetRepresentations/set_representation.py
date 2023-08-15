@@ -25,7 +25,9 @@ class AbstractSet(ABC):
     def inSet(self, points:np.ndarray) -> np.ndarray:
         pass
 
-
+    @abstractmethod
+    def deltaString(self):
+        pass
 
 
 class InftyNorm(AbstractSet):
@@ -50,6 +52,8 @@ class InftyNorm(AbstractSet):
 
         self.ub = ub
         self.lb = lb
+        self.deltaUB = np.inf
+        self.deltaLB = np.inf
         self.shape = self.ub.shape[0]
 
         if points is not None:
@@ -67,9 +71,17 @@ class InftyNorm(AbstractSet):
         return np.random.uniform(self.lb, self.ub, (N, self.shape))
 
     def fitSet(self, points:np.ndarray) -> None:
+        prev_ub = None
+        if self.ub is not None:
+            prev_ub = np.copy(self.ub)
+            prev_lb = np.copy(self.lb)
         self.ub = np.max(points, axis=0)
         self.lb = np.min(points, axis=0)
         self.shape = self.ub.shape[0]
+
+        if prev_ub is not None:
+            self.deltaUB = np.linalg.norm(self.ub - prev_ub)
+            self.deltaLB = np.linalg.norm(self.lb - prev_lb)
     
     def inSet(self, points:np.ndarray) -> np.ndarray:
         """Determine set membership of given points
@@ -84,6 +96,9 @@ class InftyNorm(AbstractSet):
 
     def getDesc(self) -> dict:
         return {"Method": "InftyNorm", "Desc": {"LB": np.copy(self.lb), "UB": np.copy(self.ub)}}
+    
+    def deltaString(self):
+        return f"Delta UB: {self.deltaUB}, Delta LB: {self.deltaLB}"
 
 
 
@@ -110,6 +125,8 @@ class Ellipsoid(AbstractSet):
 
         self.A = A
         self.c = c
+        self.deltaA = np.inf
+        self.deltac = np.inf
         
         if points is not None:
             self.fitSet(points)
@@ -151,8 +168,17 @@ class Ellipsoid(AbstractSet):
             new_u[jdx] += step_size
             err = np.linalg.norm(new_u - u)
             u = new_u
+
+        prev_c = None
+        if self.c is not None:
+            prev_c = self.c
+            prev_A = self.A
         self.c = np.dot(u, points)
         self.A = np.linalg.inv(np.dot(np.dot(points.T, np.diag(u)), points) - np.multiply.outer(self.c, self.c)) / d
+
+        if prev_c is not None:
+            self.deltac = np.linalg.norm(self.c - prev_c)
+            self.deltaA = np.linalg.norm(self.A - prev_A)
     
     def inSet(self, points:np.ndarray) -> np.ndarray:
         """Determine set membership of given points
@@ -167,6 +193,9 @@ class Ellipsoid(AbstractSet):
 
     def getDesc(self) -> dict:
         return {"Method": "Ellipsoid", "Desc": {"A": np.copy(self.A), "c": np.copy(self.c)}}
+
+    def deltaString(self):
+        return f"Delta A: {self.deltaA}, Delta c: {self.deltac}"
 
 
 class Polytope(AbstractSet):
@@ -304,6 +333,9 @@ class Polytope(AbstractSet):
         # compute new point and add it
         new_point = point + lam * direction
         return new_point
+    
+    def deltaString(self):
+        return f"Not implemented yet."
     
 
 def getExtremePoints(points:np.ndarray) -> np.ndarray:
