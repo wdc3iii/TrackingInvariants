@@ -3,9 +3,10 @@ from joblib import Parallel, delayed
 
 class TrackingInvariant:
 
-    def __init__(self, errorSet, sampleSchedule, s2sDynamics, Nsim, logger=None):
+    def __init__(self, errorSet, romSet, sampleSchedule, s2sDynamics, Nsim, logger=None):
 
         self.errorSet = errorSet
+        self.romSet = romSet
         self.sampleSchedule = sampleSchedule
         self.s2sDynamics = s2sDynamics
 
@@ -18,21 +19,27 @@ class TrackingInvariant:
         self.logger = logger
 
     @staticmethod
-    def S2SDyn_helper(points, s2sDyn):
+    def S2SDyn_helper(points, romPoints, s2sDyn):
         propogatedPoints = np.zeros_like(points)
         for ii in range(points.shape[0]):
             x0 = points[ii, :]
+            rom0 = romPoints[ii, :]
 
-            propogatedPoints[ii, :] = s2sDyn(x0)
+            propogatedPoints[ii, :] = s2sDyn(x0, rom0)
 
         return propogatedPoints       
 
-    def iterateSetMap(self, verbose:bool=True) -> None:        
-        points = self.errorSet.sampleSet(self.sampleSchedule(self.iteration))
+    def iterateSetMap(self, verbose:bool=True) -> None: 
+        N = self.sampleSchedule(self.iteration)
+        points = self.errorSet.sampleSet(N)
+        romPoints = self.romSet.sampleSet(N)
 
         ptsPer = points.shape[0] // self.Nsim
-        subsets = [points[ii * ptsPer:min((ii + 1) * ptsPer, points.shape[0]), :] for ii in range(self.Nsim)]
-        results = Parallel(n_jobs=self.Nsim, verbose=verbose)(delayed(TrackingInvariant.S2SDyn_helper)(subsetPts, self.s2sDynamics) for subsetPts in subsets)
+        subsets = [
+            (points[ii * ptsPer:min((ii + 1) * ptsPer, points.shape[0]), :] , romPoints[ii * ptsPer:min((ii + 1) * ptsPer, points.shape[0]), :])
+            for ii in range(self.Nsim)
+        ]
+        results = Parallel(n_jobs=self.Nsim, verbose=verbose)(delayed(TrackingInvariant.S2SDyn_helper)(subsetPts, romSubPts, self.s2sDynamics) for subsetPts, romSubPts in subsets)
         
         propogatedPoints = np.vstack(results)
         self.reachableList = np.vstack((self.reachableList, propogatedPoints))

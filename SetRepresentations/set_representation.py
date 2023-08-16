@@ -29,6 +29,10 @@ class AbstractSet(ABC):
     def deltaString(self):
         pass
 
+    @abstractmethod
+    def getLog(self):
+        pass
+
 
 class InftyNorm(AbstractSet):
 
@@ -45,7 +49,7 @@ class InftyNorm(AbstractSet):
             ValueError: the upper and lower bounds do not have the same shape.
         """
         super().__init__()
-        if points is None and A is None and c is None:
+        if points is None and ub is None and lb is None:
             raise ValueError("No initialization data given. Either points or (lb, ub) must be specified.")
         if points is None and ub.shape != lb.shape:
             raise ValueError(f"Upper {ub.shape} and Lower {lb.shape} bounds not of the same shape.")
@@ -100,6 +104,9 @@ class InftyNorm(AbstractSet):
     def deltaString(self):
         return f"Delta UB: {self.deltaUB}, Delta LB: {self.deltaLB}"
 
+    def getLog(self) -> np.ndarray:
+        return np.hstack((self.ub, self.lb))
+
 
 
 class Ellipsoid(AbstractSet):
@@ -127,6 +134,7 @@ class Ellipsoid(AbstractSet):
         self.c = c
         self.deltaA = np.inf
         self.deltac = np.inf
+        self.tol = tol
         
         if points is not None:
             self.fitSet(points)
@@ -196,6 +204,9 @@ class Ellipsoid(AbstractSet):
 
     def deltaString(self):
         return f"Delta A: {self.deltaA}, Delta c: {self.deltac}"
+
+    def getLog(self):
+        return np.hstack((self.A.reshape((-1,)), self.c))
 
 
 class Polytope(AbstractSet):
@@ -336,7 +347,37 @@ class Polytope(AbstractSet):
     
     def deltaString(self):
         return f"Not implemented yet."
+
+    def getLog(self):
+        return np.hstack((self.polytope.A.reshape((-1,)), self.polytope.b))
     
+class Cross(AbstractSet):
+
+    def __init__(self, set1:AbstractSet, set2:AbstractSet) -> None:
+        super().__init__()
+        self.set1 = set1
+        self.set2 = set2
+    
+    def sampleSet(self, N:int) -> np.ndarray:
+        return np.hstack((self.set1.sampleSet(N), self.set2.sampleSet(N)))
+
+    def fitSet(self, pts1:np.ndarray, pts2:np.ndarray) -> None:
+        self.set1.fitSet(pts1)
+        self.set2.fitSet(pts2)
+
+    def getDesc(self) -> dict:
+        return {"Method": "Cross", "Desc": {"1": self.set1.getDesc(), "2": self.set2.getDesc()}}
+
+    def inSet(self, pts1:np.ndarray, pts2:np.ndarray) -> np.ndarray:
+        return np.logical_and(self.set1.inSet(pts1), self.set2.inSet(pts2))
+
+    def deltaString(self):
+        return self.set1.deltaString() + " | " + self.set2.deltaString()
+
+    def getLog(self):
+        return np.hstack((self.set1.getLog(), self.set2.getLog()))
+
+
 
 def getExtremePoints(points:np.ndarray) -> np.ndarray:
     poly = pc.qhull(points)

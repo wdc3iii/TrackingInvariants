@@ -1,0 +1,22 @@
+pitch_ref: 0.045
+
+z_hip_max: 0.57925
+z_hip_to_torso: 0.186
+
+T_SSP: 0.3
+swf_pos_y: -0.08225
+z_ref: 0.6
+
+v_ref: 0.2
+
+approxMethod: "Ellipsoid"
+
+vis: false
+
+
+use_static_com: false
+gravity_comp: true
+use_ang_mom_state: false
+use_task_space_ctrl: false
+
+use_light_limbs: false
