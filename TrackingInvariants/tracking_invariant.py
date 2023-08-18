@@ -3,7 +3,7 @@ from tqdm import trange
 from collections.abc import Callable
 from HLIP.utils.logger import Logger
 from HLIP.control_py.hlip_controller import HLIPControllerPD_GC
-from SetRepresentations.set_representation import AbstractSet
+from SetRepresentations.set_representation import AbstractSet, ExtremePoints
 from HLIP.simulation_py.mujoco_interface import MujocoInterface
 
 Q_IK = np.array([
@@ -14,14 +14,14 @@ QD_ZERO = np.zeros_like(Q_IK)
 class TrackingInvariant:
 
     def __init__(
-            self, errorSet:AbstractSet, romSet:AbstractSet, sampleSchedule, #:Callable[[int, bool], int]
+            self, errorSet:AbstractSet, romSet:AbstractSet,
             s2sDynamics, # :Callable[[np.ndarray, np.ndarray], tuple]
             errorLogger:Logger=None, setLogger:Logger=None
     ):
 
         self.errorSet = errorSet
+        self.initErrorSet = None
         self.romSet = romSet
-        self.sampleSchedule = sampleSchedule
         self.s2sDynamics = s2sDynamics
 
         self.reachableList = None
@@ -29,18 +29,22 @@ class TrackingInvariant:
         self.setDescriptions = {0: errorSet.getDesc()}
 
         self.iteration = 0
+        self.proportionInSet = 0
         self.errorLogger = errorLogger
         self.setLogger = setLogger
 
-    def iterateSetMap(self, verbose:bool=True, converged:bool=False) -> None:
+    def iterateSetMap(self, N, verbose:bool=True, converged:bool=False) -> None:
 
         if verbose:
-            print(f"Iteration {self.iteration}")
+            print(f"\nIteration {self.iteration}")
             print("..... Sampling Set .....")
         
-        N = self.sampleSchedule(self.iteration, converged)
-        points = self.errorSet.sampleSet(N)
+        points = self.errorSet.sampleSet(N) if self.initErrorSet is None else self.initErrorSet.sampleSet(N)
         romPoints = self.romSet.sampleSet(N)
+
+        if self.reachableList is None:
+            self.reachableList = points
+            self.reachableTable[self.iteration] = points
 
         if verbose:
             print("..... Computing S2S .....")
@@ -50,15 +54,16 @@ class TrackingInvariant:
             x0 = points[ii, :]
             rom0 = romPoints[ii, :]
 
-            propogatedPoints[ii, :] = self.s2sDynamics(x0, rom0)
+            propogatedPoints[ii, :], IK_error = self.s2sDynamics(x0, rom0)
 
             if self.errorLogger is not None:
-                self.errorLogger.write(np.hstack((self.iteration, points[ii, :], romPoints[ii, :], propogatedPoints[ii, :])))
+                self.errorLogger.write(np.hstack((self.iteration, IK_error, points[ii, :], romPoints[ii, :], propogatedPoints[ii, :])))
         
         self.reachableList = np.vstack((self.reachableList, propogatedPoints))
         self.iteration += 1
         self.reachableTable[self.iteration] = propogatedPoints
 
+        self.calcProportionInSet()
         if verbose:
             self.verboseOut()
 
@@ -71,44 +76,33 @@ class TrackingInvariant:
             self.setLogger.write(np.hstack((self.iteration, self.errorSet.getLog())))
 
     
-    def getProportionInSet(self) -> float:
-        if self.iteration == 0:
-            return 0
-        return self.errorSet.inSet(self.reachableTable[self.iteration])
+    def calcProportionInSet(self) -> float:
+        if self.iteration > 0:
+            inSet = self.errorSet.inSet(self.reachableTable[self.iteration])
+            self.proportionInSet = np.sum(inSet) / inSet.size
     
+    def getProportionInSet(self):
+        return self.proportionInSet
+
     def verboseOut(self) -> None:
         """Print some statistics after a run
         """
         # First, proportion of points which were set invariant
         prop_in_set = self.getProportionInSet()
         print(f"Proportion of Points in set: {np.sum(prop_in_set) / np.size(prop_in_set)}")
-        print(self.errorSet.DeltaString())
+        print(F"Volume of Set: {self.errorSet.getVolume()}")
+        print(self.errorSet.deltaString())
 
 
-def sampleSchedule(iter_:int, converged:bool=False) -> int:
-    if converged:
-        return 1000
-    if iter_ < 5:
-        return 20
-    if iter_ < 10:
-        return 100
-    return 250
+def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, rom0:np.ndarray, vis:bool=False, video:bool=False) -> tuple:
+    u_prev = rom0[0] # Previous step length
+    u_nom = rom0[3]  # Current (i.e. in progress) step length
+    z0 = rom0[1:3]   # Post-impact state
 
+    # get nominal initial condition (Pre-Impact)
+    y0, yd0, yF, ydF = ctrl.getNominalS2S(u_prev, z0, u_nom)
 
-def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, rom0:np.ndarray, vis:bool=False) -> tuple:
-    u_prev = rom0[0]
-    u_nom = rom0[3]
-    z0 = rom0[1:3]
-
-    # get nominal initial condition
-    y0 = np.array([
-        ctrl.pitch_ref,
-        u_prev,
-        0,
-        z0[0] + u_prev,
-        ctrl.z_ref
-    ])
-    # Modify with the error
+    # Modify IC with the error
     y0 += e0[:5]
     # And compute the initial position
     q0, _ = ctrl.adamKin.solveIK(Q_IK, y0, False)
@@ -118,12 +112,8 @@ def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, 
     ft_pos = mjInt.getFootPos()
     q0[1] -= ft_pos[1][1] - ctrl.adamKin.getContactOffset(q0, False)
     
-    # Construct nominal velocity
-    yd0 = np.array([
-        0, 0, ctrl.swf_pos_z_poly.evalPoly(ctrl.T_SSP, 1), z0[1], 0, 0, 0
-    ])
     # Modify with error
-    yd0[:5] += e0[5:]
+    yd0 += e0[5:]
     # Compute initial velocity
     qd0 = ctrl.adamKin.solveIKVel(q0, yd0, False)
 
@@ -137,8 +127,11 @@ def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, 
 
     frames = []
 
+    IK_error = False
     while True:
         if vis:
+            mjInt.updateScene()
+        if video:
             frames.append(mjInt.readPixels())
 
         # Compute the S2S time
@@ -147,7 +140,10 @@ def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, 
         qpos = mjInt.getGenPosition()
         qvel = mjInt.getGenVelocity() 
         # Compute control action 
-        q_pos_ref, q_vel_ref, q_ff_ref = ctrl.gaitController(qpos, qvel, u_nom, t)
+        q_pos_ref, q_vel_ref, q_ff_ref, sol_found = ctrl.gaitController(qpos, qvel, u_nom, t)
+
+        if not sol_found:
+            IK_error = True
 
         # Apply control action
         mjInt.jointPosCmd(q_pos_ref)
@@ -172,18 +168,9 @@ def s2sDynamics(mjInt:MujocoInterface, ctrl:HLIPControllerPD_GC, e0:np.ndarray, 
     qCpos = ctrl.adamKin.calcOutputs(qpos, False)
     qCvel = ctrl.adamKin.calcDOutputs(qpos, qvel, False)
 
-    z1 = ctrl.hlip(z0, u_nom)
-    e1 = qCpos - np.array([
-        ctrl.pitch_ref,
-        u_nom,
-        0,
-        z1[0] + u_nom,
-        ctrl.z_ref
-    ])
-    ed1 = qCvel - np.array([
-        0, 0, ctrl.swf_pos_z_poly.evalPoly(ctrl.T_SSP, 1), z1[1], 0
-    ])
+    e1 = qCpos - yF
+    ed1 = qCvel - ydF
 
-    if vis:
+    if video:
         return frames
-    return np.hstack((e1, ed1))
+    return np.hstack((e1, ed1)), IK_error

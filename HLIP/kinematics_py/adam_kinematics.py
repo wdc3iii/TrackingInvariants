@@ -265,7 +265,7 @@ class Kinematics:
             self.getSTFJacobian(qpos, stanceFoot)[0:3:2, :]
         ))
 
-        qvel = np.linalg.inv(Jy_out_ref) @ ydot
+        qvel = np.linalg.inv(Jy_out_ref) @ np.hstack((ydot, np.zeros((2,))))
         return qvel
 
 

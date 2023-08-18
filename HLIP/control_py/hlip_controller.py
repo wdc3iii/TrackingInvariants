@@ -171,7 +171,7 @@ class HLIPControllerPD_GC:
 
         q_ff_ref_gravcomp = self.adamKin.calcGravityCompensation(q_pos, self.cur_stf)
 
-        return q_ref, qd_ref, q_ff_ref_gravcomp
+        return q_ref, qd_ref, q_ff_ref_gravcomp, sol_found
     
     def reset(self):
         self.cur_stf = False
@@ -180,7 +180,31 @@ class HLIPControllerPD_GC:
         self.swf_x_start = 0
 
         self.t_phase_start = -2 * self.T_SSP
+    
+    def getNominalS2S(self, u_prev, x0, u_nom):
+        x1 = self.calcPreimpactState(x0, self.T_SSP)
+        y0 = np.array([
+            self.pitch_ref,     # Desired pitch
+            u_prev,             # Xswf is step length
+            0,                  # Zswf = 0 pre-impact
+            x0[0] + u_prev,     # Xcom = Xhlip(post_impact) + u_prev (to get pre-impact)
+            self.z_ref          # Zcom = Zref
+        ])
+        yd0 = np.array([
+            0, self.swf_x_bez.deval(0), self.swf_pos_z_poly.evalPoly(0, 1), x0[1], 0
+        ])
+        yF = np.array([
+            self.pitch_ref,     # Desired pitch
+            u_nom,             # Xswf is step length
+            0,                  # Zswf = 0 pre-impact
+            x1[0],              # Xcom = Xhlip(pre_impact)
+            self.z_ref          # Zcom = Zref
+        ])
+        ydF = np.array([
+            0, self.swf_x_bez.deval(1), self.swf_pos_z_poly.evalPoly(self.T_SSP, 1), x1[1], 0
+        ])
+        return y0, yd0, yF, ydF
 
-    def hlip(self, x, u):
-        x[0] -= u
-        return self.calcPreimpactState(x, self.T_SSP)
+    # def hlip(self, x, u):
+    #     x[0] -= u
+    #     return self.calcPreimpactState(x, self.T_SSP)

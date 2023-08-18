@@ -33,6 +33,10 @@ class AbstractSet(ABC):
     def getLog(self):
         pass
 
+    @abstractmethod
+    def getVolume(self):
+        pass
+
 
 class InftyNorm(AbstractSet):
 
@@ -107,11 +111,14 @@ class InftyNorm(AbstractSet):
     def getLog(self) -> np.ndarray:
         return np.hstack((self.ub, self.lb))
 
+    def getVolume(self):
+        return np.prod(self.ub - self.lb)
+
 
 
 class Ellipsoid(AbstractSet):
 
-    def __init__(self, points:np.ndarray=None, A:np.ndarray=None, c:np.ndarray=None, tol:float=1e-6) -> None:
+    def __init__(self, points:np.ndarray=None, A:np.ndarray=None, c:np.ndarray=None, tol:float=1e-4) -> None:
         """Initializes an ellipsoid of arbitrary dimension, of the form (x-c)^T A (x-c) <= 1.
         Can be initialized with either a set of points to fit around, or values for A and c.
 
@@ -135,6 +142,7 @@ class Ellipsoid(AbstractSet):
         self.deltaA = np.inf
         self.deltac = np.inf
         self.tol = tol
+        self.membershipTol = tol
         
         if points is not None:
             self.fitSet(points)
@@ -183,6 +191,14 @@ class Ellipsoid(AbstractSet):
             prev_A = self.A
         self.c = np.dot(u, points)
         self.A = np.linalg.inv(np.dot(np.dot(points.T, np.diag(u)), points) - np.multiply.outer(self.c, self.c)) / d
+        fitError = max(np.diag((points - self.c) @ self.A @ (points - self.c).T))
+        self.A /= fitError
+
+        inSet = self.inSet(points)
+        if not np.all(inSet):
+            raise ValueError("Not all points in ellipsoid")
+        if fitError > 1.025:
+            print(f".....Warning: Fit Error Large: {fitError}.....")
 
         if prev_c is not None:
             self.deltac = np.linalg.norm(self.c - prev_c)
@@ -197,7 +213,7 @@ class Ellipsoid(AbstractSet):
         Returns:
             np.ndarray: Set membership of given points
         """
-        return (points - self.c).T @ self.A @ (points - self.c) <= 1
+        return np.diag((points - self.c) @ self.A @ (points - self.c).T) <= 1 + self.membershipTol
 
     def getDesc(self) -> dict:
         return {"Method": "Ellipsoid", "Desc": {"A": np.copy(self.A), "c": np.copy(self.c)}}
@@ -207,6 +223,10 @@ class Ellipsoid(AbstractSet):
 
     def getLog(self):
         return np.hstack((self.A.reshape((-1,)), self.c))
+    
+    def getVolume(self):
+        d = self.c.shape[0]
+        return np.pi ** (d / 2) / factorial(d / 2) * np.prod(np.linalg.eigvals(np.linalg.inv(self.A)))
 
 
 class Polytope(AbstractSet):
@@ -240,6 +260,8 @@ class Polytope(AbstractSet):
         self._findAuxPoints()
     
     def sampleSet(self, N:int) -> np.ndarray:
+        if self.polytope.dim > 5:
+            return self.sampleSetHitandRun(N)
         boundingBox = self.polytope.bounding_box
         allSamples = np.zeros((self.polytope.dim, N))
         ii = 0
@@ -350,6 +372,9 @@ class Polytope(AbstractSet):
 
     def getLog(self):
         return np.hstack((self.polytope.A.reshape((-1,)), self.polytope.b))
+
+    def getVolume(self):
+        return self.polytope.volume
     
 class Cross(AbstractSet):
 
@@ -376,11 +401,98 @@ class Cross(AbstractSet):
 
     def getLog(self):
         return np.hstack((self.set1.getLog(), self.set2.getLog()))
+    
+    def getVolume(self):
+        return self.set1.getVolume() * self.set2.getVolume()
 
+
+class Points(AbstractSet):
+
+    def __init__(self, points) -> None:
+        self.points = points
+
+    def sampleSet(self, N:int) -> np.ndarray:
+        inds = np.random.randint(0, self.points.shape[0], N)
+        return self.points[inds, :]
+
+    def fitSet(self, points:np.ndarray) -> None:
+        self.points = points
+
+    def getDesc(self) -> dict:
+        return {"Method": "Points", "Desc": self.points}
+
+    def inSet(self, points:np.ndarray) -> np.ndarray:
+        return np.array([np.any(self.points == point) for point in points])
+
+    def deltaString(self):
+        return "Not Implemented Yet"
+
+    def getLog(self):
+        return self.points.reshape((-1,))
+
+    def getVolume(self):
+        return 0
+    
+
+class ExtremePoints(AbstractSet):
+
+    def __init__(self, points) -> None:
+        self.extremePoints = points
+
+    def sampleSet(self, N:int) -> np.ndarray:
+        numPts = np.random.randint(1, min(11, self.extremePoints.shape[0]) + 1, size=(N,))
+        # For each sampled point, construct as convex combination
+        # Initialize return array
+        sampledPoints = np.zeros((N, self.extremePoints.shape[1]))
+        for ii, nPts in enumerate(numPts):
+            # Randomly sample the given number of points
+            inds = np.random.choice(range(self.extremePoints.shape[0]), size=(nPts,), replace=False)
+            # If it is a single point, return the point
+            if nPts == 1:
+                sampledPoints[ii, :] = self.extremePoints[inds, :]
+            else:
+                # Return a convex combination of the given poitns
+                subset = self.extremePoints[inds, :]
+                lmbd = np.random.uniform(0, 1, (1, subset.shape[0]))
+                lmbd /= np.sum(lmbd, axis=1)
+                sampledPoints[ii, :] = lmbd @ subset
+        return sampledPoints
+
+    def fitSet(self, points:np.ndarray) -> None:
+        self.extremePoints = points
+
+    def getDesc(self) -> dict:
+        return {"Method": "Points", "Desc": self.extremePoints}
+
+    def inSet(self, points:np.ndarray) -> np.ndarray:
+        return 0
+
+    def deltaString(self):
+        return "Not Implemented Yet"
+
+    def getLog(self):
+        return self.extremePoints.reshape((-1,))
+    
+    def getVolume(self):
+        return -1
 
 
 def getExtremePoints(points:np.ndarray) -> np.ndarray:
     poly = pc.qhull(points)
     return pc.extreme(poly)
 
-    
+
+def factorial(n):
+    if n <= 1:
+        return 1
+    if n == 2:
+        return 2
+    if n == 3:
+        return 6
+    if n == 4:
+        return 24
+    if n == 5:
+        return 120
+    if n == 6:
+        return 720
+    return n * factorial(n - 1)
