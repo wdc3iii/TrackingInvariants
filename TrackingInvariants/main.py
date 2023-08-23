@@ -27,13 +27,13 @@ def main():
     ulim = np.array(config["u_lim"])
     errEps = config["errorEps0"]
 
-    pts = np.array(config["operatingPts"])
+    romSet = Cross(
+        InftyNorm(lb=np.array([ulim[0]]), ub=np.array([ulim[1]])),
+        Polytope(A=romA, b=romb)
+    )
 
-    # romSet = Cross(
-    #     InftyNorm(lb=np.array([ulim[0]]), ub=np.array([ulim[1]])),
-    #     Polytope(A=romA, b=romb)
-    # )
-    romSet = Points(pts)
+    # pts = np.array(config["operatingPts"])
+    # romSet = Points(pts)
     errorSet = Ellipsoid(A=np.eye(10) / errEps, c=np.zeros((10,)))
 
     mjInt = MujocoInterface(xml_path, vis_enabled=vis)

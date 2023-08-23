@@ -29,10 +29,12 @@ def main():
 
     mjInt = MujocoInterface(xml_path, vis_enabled=True)
     hlip = HLIPControllerPD_GC(
-        T_SSP, z_ref, urdf_path, mesh_path, mjInt.mass, pitch_ref=pitch_ref
+        T_SSP, z_ref, urdf_path, mesh_path, mjInt. mass, pitch_ref=pitch_ref
     )
 
     for ii in error_log.index:
+        if ii > 10:
+            break
         e0 = error_log.iloc[ii, 2:12].values
         rom0 = error_log.iloc[ii, 12:16].values
         frames = s2sDynamics(mjInt, hlip, e0, rom0, vis=True, video=True)

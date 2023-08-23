@@ -71,6 +71,7 @@ class TrackingInvariant:
             print("..... Fitting Set .....")
         # Fit a new convex outerapproximation
         self.errorSet.fitSet(self.reachableList)
+        self.reachableList = self.errorSet.prunePoints(self.reachableList)
         self.setDescriptions[self.iteration] = self.errorSet.getDesc()
         if self.setLogger is not None:
             self.setLogger.write(np.hstack((self.iteration, self.errorSet.getLog())))

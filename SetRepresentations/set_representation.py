@@ -203,6 +203,14 @@ class Ellipsoid(AbstractSet):
         if prev_c is not None:
             self.deltac = np.linalg.norm(self.c - prev_c)
             self.deltaA = np.linalg.norm(self.A - prev_A)
+        
+    def prunePoints(self, points:np.ndarray, lim:int=200) -> np.ndarray:
+        if points.shape[0] <= lim:
+            return points
+        pointEval = np.diag((points - self.c) @ self.A @ (points - self.c).T)
+        cutOff = sorted(pointEval)[-lim]
+        print(f"Point CutOff Value: {cutOff}")
+        return points[pointEval > cutOff, :]
     
     def inSet(self, points:np.ndarray) -> np.ndarray:
         """Determine set membership of given points
